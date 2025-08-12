@@ -865,3 +865,17 @@ async def save_chat(email: str, member_name: str, request: Request):
 
     save_chat_data_to_file(email, member_name, chat)
     return {"message": "Chat data saved successfully"}
+
+
+@app.get("/api/get-username")
+async def get_username(email: str = Query(...)):
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("SELECT username FROM users WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        if row:
+            return {"username": row["username"]}
+        else:
+            return {"username": None}
+    finally:
+       conn.close()
