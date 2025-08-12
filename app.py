@@ -64,7 +64,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,7 +72,7 @@ app.add_middleware(
 
 from fastapi import Query
 
-@app.get("/api/get-username")
+@app.get("/medlifeV2/get-username")
 async def get_username(email: str = Query(...)):
     conn = get_db_connection()
     try:
@@ -85,7 +85,7 @@ async def get_username(email: str = Query(...)):
     finally:
         conn.close()
 
-@app.get("/api/get-user-gender")
+@app.get("/medlifeV2/get-user-gender")
 async def get_user_gender(email: str = Query(...)):
     conn = get_db_connection()
     try:
@@ -185,7 +185,7 @@ class UserLogin(BaseModel):
     login: str  # username or email
     password: str
 
-@app.post("/token")
+@app.post("/medlifeV2/token")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -209,7 +209,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     )
     return {"access_token": access_token, "token_type": "bearer", "email": email}
 
-@app.post("/signin")
+@app.post("/medlifeV2/signin")
 def login(user: UserLogin):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -233,7 +233,7 @@ def login(user: UserLogin):
     )
     return {"message": "Login successful", "email": email, "access_token": access_token}
 
-@app.post("/signup")
+@app.post("/medlifeV2/signup")
 def signup(user: UserSignup):
     logging.debug(f"Signup request received: {user}")
     
@@ -313,7 +313,7 @@ class Data(BaseModel):
 
 
 
-@app.get("/medlife/ai")
+@app.get("/medlifeV2/ai")
 def read_root():
     return {"Hello": "World"}
 #<<<<<<<<<<<<<<<<<JSON FILE OPENER>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -750,7 +750,7 @@ from fastapi import Depends
 
 from fastapi import Body
 
-@app.post("/medlife/addmember")
+@app.post("/medlifeV2/addmember")
 async def add_member(data: Data = Body(...)):
     email = data.email
 
@@ -811,7 +811,7 @@ async def add_member(data: Data = Body(...)):
 
 from fastapi import Body
 
-@app.post("/medlife/editmember")
+@app.post("/medlifeV2/editmember")
 async def edit_member(member_index: int, data: Data = Body(...)):
     email = data.email
     conn = get_db_connection()
@@ -871,7 +871,7 @@ from fastapi import Depends
 
 from fastapi import Query
 
-@app.get("/medlife/getmember")
+@app.get("/medlifeV2/getmember")
 async def get_member(email: str = Query(...)):
     conn = get_db_connection()
     try:
@@ -911,7 +911,7 @@ class DeleteMemberRequest(BaseModel):
 
 from fastapi import Query
 
-@app.delete("/medlife/deletemember")
+@app.delete("/medlifeV2/deletemember")
 async def delete_member(email: str = Query(...), member_index: int = Query(...)):
     """
     Delete a specific family member from the database by member index (1-4)
@@ -1008,7 +1008,7 @@ async def delete_member(email: str = Query(...), member_index: int = Query(...))
 
 from typing import Optional
 
-@app.get("/medlife/ask_ai/")
+@app.get("/medlifeV2/ask_ai/")
 async def ask_ai(query: str, api_key: str, provider: str = "openai", email: Optional[str] = None, member_data: Optional[str] = None, fallback_provider: Optional[str] = None):
     prompt_text = f"Act as an Healthcare AI assistant, answer health questions based on patient data. "
     
@@ -1040,7 +1040,7 @@ async def ask_ai(query: str, api_key: str, provider: str = "openai", email: Opti
         raise HTTPException(status_code=400, detail=str(e))
 
 #<<<<<<<<<<<<<<<<<PROMPT FOR CHAT>>>>>>>>>>>>>>>>>>
-@app.get("/medlife/prompt/")
+@app.get("/medlifeV2/prompt/")
 async def prompt(query: str, api_key: str):
     if not api_key:
         raise HTTPException(status_code=400, detail="OpenAI API key is required")
@@ -1052,7 +1052,7 @@ async def prompt(query: str, api_key: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 #<<<<<<<<<<<<<<<<<ADD TOKEN>>>>>>>>>>>>>>>>>>
-@app.get("/medlife/tokens/")
+@app.get("/medlifeV2/tokens/")
 async def increment_tokens(email: str, member_name: str):
     conn = get_db_connection()
     try:
@@ -1083,7 +1083,7 @@ async def increment_tokens(email: str, member_name: str):
         conn.close()
 
 #<<<<<<<<<<<<<<<<<GET TOKEN COUNT>>>>>>>>>>>>>>>>>>
-@app.get("/medlife/tokensCount/")
+@app.get("/medlifeV2/tokensCount/")
 async def get_token_count(email: str, member_name: str):
     conn = get_db_connection()
     try:
@@ -1104,7 +1104,7 @@ async def get_token_count(email: str, member_name: str):
     finally:
         conn.close()
 
-@app.get("/api/member-details/{email}/{member_index}")
+@app.get("/medlifeV2/member-details/{email}/{member_index}")
 async def get_member_details(email: str, member_index: int):
     """
     Fetch complete details for a specific family member
@@ -1183,7 +1183,7 @@ def load_chat_data_from_file(email: str, member_name: str):
     return chat_data
 
 #<<<<<<<<<<<<<<<<<FETCH CHAT DATA>>>>>>>>>>>>>>>>>>>>
-@app.get("/medlife/fetchChat/")
+@app.get("/medlifeV2/fetchChat/")
 async def fetch_chat(email: str, member_name: str):
     chat_data = load_chat_data_from_file(email, member_name)
     return {"chat": chat_data}
@@ -1191,7 +1191,7 @@ async def fetch_chat(email: str, member_name: str):
 #<<<<<<<<<<<<<<<<<SAVE CHAT DATA>>>>>>>>>>>>>>>>>>>>
 from fastapi import Request
 
-@app.post("/medlife/saveChat/")
+@app.post("/medlifeV2/saveChat/")
 async def save_chat(email: str, member_name: str, request: Request):
     data = await request.json()
     chat = data.get("chat", [])

@@ -2935,3 +2935,28 @@ AttributeError: module 'bcrypt' has no attribute '__about__'
 2025-08-12 19:11:36,962 DEBUG:response_closed.complete
 2025-08-12 19:11:36,962 DEBUG:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Tue, 12 Aug 2025 13:41:36 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-y7bpota4b2tng274ql53kz5t'), ('openai-processing-ms', '393'), ('openai-project', 'proj_ngFD18iL5sN2EVwhZx5dhs9r'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '531'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '50000000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '49999878'), ('x-ratelimit-reset-requests', '6ms'), ('x-ratelimit-reset-tokens', '0s'), ('x-request-id', 'req_596361bed3d445409ffefc23863a7a8d'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=sfNUklkgqqcibR7LSK_sRM3STbp3.m1XDIkoALIz.9Q-1755006096-1.0.1.1-906cHYny7T1S78KbcmIAH1p_dY9Np4bcyqGTToC4552WnXhU01MQ3HBybYhT6Q8eUo6Wkcw2JQNZt._V2l82EWORr8kflPyjMBYe6LWk3s8; path=/; expires=Tue, 12-Aug-25 14:11:36 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=untgsXsOiNphlkli5eGdgvadETm8rtHi7HCKr3jOGQM-1755006096436-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '96e0641dab92ff67-BOM'), ('content-encoding', 'br'), ('alt-svc', 'h3=":443"; ma=86400')])
 2025-08-12 19:11:36,962 DEBUG:request_id: req_596361bed3d445409ffefc23863a7a8d
+2025-08-12 20:34:08,600 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:46:25,645 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:46:28,985 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:46:36,104 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:46:46,825 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:46:49,854 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:46:58,538 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:47:12,381 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:47:17,017 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:02,453 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:08,250 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:11,957 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:15,351 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:19,487 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:26,064 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:31,550 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:35,937 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:39,724 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:44,655 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:48,029 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:48:51,940 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:49:02,133 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:49:07,927 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:49:20,552 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-08-12 20:49:24,464 DEBUG:registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
