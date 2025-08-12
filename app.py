@@ -1,14 +1,17 @@
-
 import logging
 import hashlib
+import re
 from fastapi import FastAPI,  HTTPException, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 import json
 from openai import OpenAI
 import random
-from dotenv import load_dotenv  
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
+
+from dotenv import load_dotenv
 import os
 import sqlite3
 from passlib.context import CryptContext
@@ -20,12 +23,40 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import secrets
 load_dotenv()
 
+# JWT Configuration
+SECRET_KEY = "your-secret-key-change-this-in-production"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def get_current_user_email(token: str = Security(oauth2_scheme)):
-    # Implement token decoding and user email extraction here
-    # For now, assume token is the email for simplicity
-    return token
+from typing import Optional
+from datetime import datetime, timedelta
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta is not None:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        return email
+    except JWTError:
+        raise credentials_exception
 
 logging.basicConfig(filename='app.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s:%(message)s')
 
@@ -38,6 +69,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi import Query
+
+@app.get("/api/get-username")
+async def get_username(email: str = Query(...)):
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("SELECT username FROM users WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        if row:
+            return {"username": row["username"]}
+        else:
+            return {"username": None}
+    finally:
+        conn.close()
+
+@app.get("/api/get-user-gender")
+async def get_user_gender(email: str = Query(...)):
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("SELECT member1_gender FROM family_members WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        if row and row["member1_gender"]:
+            return {"gender": row["member1_gender"]}
+        else:
+            return {"gender": None}
+    finally:
+        conn.close()
 
 # ---------- USER AUTH SETUP ----------
 DATABASE_URL = "users.db"
@@ -126,6 +185,30 @@ class UserLogin(BaseModel):
     login: str  # username or email
     password: str
 
+@app.post("/token")
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT email, password_hash FROM users WHERE email = ? OR username = ?",
+        (form_data.username, form_data.username)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=401, detail="Incorrect email/username or password")
+    email, password_hash = row
+    if not pwd_context.verify(form_data.password, password_hash):
+        conn.close()
+        raise HTTPException(status_code=401, detail="Incorrect email/username or password")
+    conn.close()
+    
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer", "email": email}
+
 @app.post("/signin")
 def login(user: UserLogin):
     conn = get_db_connection()
@@ -143,12 +226,34 @@ def login(user: UserLogin):
         conn.close()
         raise HTTPException(status_code=401, detail="Incorrect email/username or password")
     conn.close()
-    return {"message": "Login successful", "email": email}
+    
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": email}, expires_delta=access_token_expires
+    )
+    return {"message": "Login successful", "email": email, "access_token": access_token}
 
 @app.post("/signup")
 def signup(user: UserSignup):
     logging.debug(f"Signup request received: {user}")
     
+    # Validate email format
+    email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_regex, user.email):
+        raise HTTPException(status_code=400, detail="Invalid email format")
+    
+    # Validate password complexity
+    password = user.password
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+    if not re.search(r'[A-Z]', password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
+    if not re.search(r'[a-z]', password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one lowercase letter")
+    if not re.search(r'[0-9]', password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one numeric digit")
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one special character")
     
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -223,10 +328,7 @@ def save_family_data(data):
     with open("family_data.json", "w") as file:
         json.dump(data, file)
 
-
-
 #<<<<<<<<<<<<<<<<<AI FUNCTION>>>>>>>>>>>>>>>>>>
-
 
 # Multi-provider API support functions
 def get_provider_config(provider: str):
@@ -240,9 +342,19 @@ def get_provider_config(provider: str):
         "gemini": {
             "name": "Google Gemini",
             "base_url": "https://generativelanguage.googleapis.com/v1beta",
-            "models": ["gemini-2.0","gemini-pro", "gemini-pro-vision"]
+            "models": ["gemini-2.0-flash", "gemini-2.0", "gemini-pro"]
         },
-        # Removed other AI providers - keeping only OpenAI and Gemini
+        "mistral": {
+            "name": "Mistral AI",
+            "base_url": "https://api.mistral.ai/v1",
+            "models": ["mistral-small-latest", "mistral-large-latest", "open-mistral-7b"]
+        },
+        # Claude ordered with the lowest-cost first to maximize “free” mileage
+        "claude": {
+            "name": "Anthropic Claude",
+            "base_url": "https://api.anthropic.com/v1",
+            "models": ["claude-3-haiku-20240307", "claude-3-5-sonnet-latest", "claude-3-opus-20240229"]
+        },
     }
     return configs.get(provider, configs["openai"])
 
@@ -292,7 +404,7 @@ def ask_openai(question, api_key, provider="openai", model=None):
         raise ValueError(f"OpenAI API error: {str(e)}")
 
 def ask_gemini(question, api_key, model="gemini-2.0-flash"):
-    """Google Gemini API integration with enhanced error handling"""
+    "Google Gemini API integration with enhanced error handling"
     if not api_key:
         raise ValueError("Google Gemini API key is required")
     
@@ -380,20 +492,254 @@ def ask_gemini(question, api_key, model="gemini-2.0-flash"):
     
     return "Maximum retry attempts reached. Please try again later."
 
-# Removed ask_claude and ask_mistral functions - keeping only OpenAI and Gemini
+def ask_mistral(question, api_key, model="mistral-small-latest"):
+    """Mistral AI API integration with comprehensive error handling"""
+    if not api_key:
+        raise ValueError("Mistral API key is required")
+    
+    import socket
+    import time
+    
+    url = "https://api.mistral.ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
-def ask_provider(question, api_key, provider="openai", model=None):
-    """Unified function to handle all AI providers"""
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful healthcare AI assistant. Provide accurate, helpful medical information while reminding users to consult healthcare professionals for medical advice."},
+            {"role": "user", "content": question}
+        ],
+        "max_tokens": 1000,
+        "temperature": 0.7
+    }
+    
+    # Retry mechanism with exponential backoff
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            # Test DNS resolution first
+            try:
+                socket.gethostbyname('api.mistral.ai')
+            except socket.gaierror as dns_error:
+                logging.error(f"DNS resolution failed for api.mistral.ai: {dns_error}")
+                return f"DNS resolution failed. Please check your internet connection or DNS settings. Error: {str(dns_error)}"
+            
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code == 401:
+                return "Invalid Mistral API key. Please check your API key and try again."
+            elif response.status_code == 429:
+                return "Mistral API rate limit exceeded. Please try again later."
+            elif response.status_code == 500:
+                return "Mistral service is temporarily unavailable. Please try again later."
+            elif response.status_code == 400:
+                try:
+                    err = response.json()
+                except Exception:
+                    err = {"message": response.text}
+                logging.error(f"Mistral 400 error: {err}")
+                return f"Mistral request was invalid. Details: {err}"
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            if "choices" in data and data["choices"]:
+                return data["choices"][0]["message"]["content"]
+            else:
+                return "No response received from the Mistral AI service."
+                
+        except requests.exceptions.ConnectionError as e:
+            if "NameResolutionError" in str(e) or "getaddrinfo failed" in str(e):
+                logging.error(f"DNS resolution error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (2 ** attempt))
+                    continue
+                return "DNS resolution failed. Please check your DNS settings or internet connection."
+            else:
+                logging.error(f"Connection error: {e}")
+                return "Unable to connect to the Mistral AI service. Please check your internet connection."
+                
+        except requests.exceptions.Timeout:
+            logging.error(f"Request timeout on attempt {attempt + 1}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (2 ** attempt))
+                continue
+            return "Request timeout. The Mistral AI service is taking longer than expected to respond."
+            
+        except requests.exceptions.HTTPError as e:
+            response = e.response
+            if response and response.status_code == 429:
+                return "Mistral API rate limit exceeded. Please try again later."
+            elif response and response.status_code == 401:
+                return "Invalid Mistral API key. Please check your API key and try again."
+            elif response and response.status_code == 500:
+                return "Mistral service is temporarily unavailable. Please try again later."
+            else:
+                logging.error(f"HTTP error: {e}")
+                return f"Mistral AI service error: {str(e)}"
+                
+        except Exception as e:
+            logging.error(f"Unexpected error in ask_mistral: {e}")
+            return "An unexpected error occurred while processing your request. Please try again later."
+    
+    return "Maximum retry attempts reached. Please try again later."
+
+def ask_claude(question, api_key, model="claude-3-haiku-20240307", _fallback=None):
+    """Claude (Anthropic) integration using the Messages API schema, tuned for free/low-credit accounts."""
+    if not api_key:
+        raise ValueError("Claude API key is required")
+    
+    import socket
+    import time
+    
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01"  # required header
+    }
+
+    payload = {
+        "model": model,           # default to Haiku (cheapest)
+        "max_tokens": 256,        # smaller to fit tight free budgets
+        "temperature": 0.7,
+        "system": "You are a helpful healthcare AI assistant. Provide accurate, helpful medical information while reminding users to consult healthcare professionals for medical advice.",
+        "messages": [
+            {"role": "user", "content": question}
+        ]
+    }
+    
+    # Retry mechanism with exponential backoff
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            # DNS check
+            try:
+                socket.gethostbyname('api.anthropic.com')
+            except socket.gaierror as dns_error:
+                logging.error(f"DNS resolution failed for api.anthropic.com: {dns_error}")
+                return f"DNS resolution failed. Please check your internet connection or DNS settings. Error: {str(dns_error)}"
+            
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            if response.status_code in (400, 401, 429, 500):
+                try:
+                    err = response.json()
+                except Exception:
+                    err = {"message": response.text}
+                msg = ""
+                if isinstance(err, dict):
+                    error_obj = err.get("error", {})
+                    if isinstance(error_obj, dict):
+                        msg = error_obj.get("message", "")
+                # Translate common errors to clear app responses
+                if response.status_code == 401:
+                    return "Invalid Claude API key. Please check your API key."
+                if response.status_code == 429:
+                    return "Claude API rate limit exceeded. Please try again later."
+                if response.status_code == 500:
+                    return "Claude service is temporarily unavailable. Please try again later."
+                if response.status_code == 400 and "credit balance is too low" in msg.lower():
+                    # Keep it explicit so the UI can react
+                    return ("Claude is unavailable for this account right now (insufficient credits). "
+                            "Add credits in Anthropic Billing or pass a fallback_provider to continue.")
+                logging.error(f"Claude 400 error: {err}")
+                return f"Claude request was invalid. Details: {err}"
+            
+            response.raise_for_status()
+            data = response.json()
+
+            # Messages API returns list of content blocks
+            if "content" in data and isinstance(data["content"], list) and data["content"]:
+                for block in data["content"]:
+                    if block.get("type") == "text" and "text" in block:
+                        return block["text"]
+                return " ".join([b.get("text", "") for b in data["content"] if isinstance(b, dict)]).strip() or "No response received from the Claude AI service."
+            else:
+                return "No response received from the Claude AI service."
+                
+        except requests.exceptions.ConnectionError as e:
+            if "NameResolutionError" in str(e) or "getaddrinfo failed" in str(e):
+                logging.error(f"DNS resolution error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (2 ** attempt))
+                    continue
+                return "DNS resolution failed. Please check your DNS settings or internet connection."
+            else:
+                logging.error(f"Connection error: {e}")
+                return "Unable to connect to the Claude AI service. Please check your internet connection."
+                
+        except requests.exceptions.Timeout:
+            logging.error(f"Request timeout on attempt {attempt + 1}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (2 ** attempt))
+                continue
+            return "Request timeout. The Claude AI service is taking longer than expected to respond."
+            
+        except requests.exceptions.HTTPError as e:
+            response = e.response
+            if response and response.status_code == 429:
+                return "Claude API rate limit exceeded. Please try again later."
+            elif response and response.status_code == 401:
+                return "Invalid Claude API key. Please check your API key."
+            elif response and response.status_code == 500:
+                return "Claude service is temporarily unavailable. Please try again later."
+            else:
+                logging.error(f"Claude HTTP error: {e}")
+                return f"Claude AI service error: {str(e)}"
+                
+        except Exception as e:
+            logging.error(f"Unexpected error in ask_claude: {e}")
+            return "An unexpected error occurred while processing your request. Please try again later."
+    
+    return "Maximum retry attempts reached. Please try again later."
+
+def ask_provider(question, api_key, provider="openai", model=None, fallback=None):
+    """Unified function to handle all AI providers. Optional fallback keeps UX alive without changing defaults."""
     providers = {
         "openai": ask_openai,
         "gemini": ask_gemini,
-        
+        "mistral": ask_mistral,
+        "claude": ask_claude,
     }
-    
     if provider not in providers:
         raise ValueError(f"Unsupported provider: {provider}")
-    
-    return providers[provider](question, api_key, model)
+
+    primary = providers[provider](question, api_key, model)
+
+    # If Claude is out of credits and a fallback is provided, try it
+    if (provider == "claude"
+        and isinstance(primary, str)
+        and "insufficient credits" in primary.lower()
+        and fallback in providers):
+        fb_key = os.getenv(f"{fallback.upper()}_API_KEY")
+        if not fb_key:
+            # No env key? just return the primary message
+            return primary
+        try:
+            return providers[fallback](question, fb_key, None)
+        except Exception as _:
+            return primary  # don't break existing behavior
+
+    return primary
+
 '''
 myself means account holder email owner.
 [{"abc@gmail.com":{myself:{firstName:'a',lastName:'b',dob:'1',race:'A',gender:'M',height:'5ft',weight:'55kg',a1c:'5',bloodPressure:'98',medicine:'paracetamol',tokens:45},member1:{},member2:{},member3:{}}},{}]
@@ -461,8 +807,6 @@ async def add_member(data: Data = Body(...)):
     finally:
         conn.close()
 
-
-
 #<<<<<<<<<<<<<<<<<edit FAMILY MEMBER>>>>>>>>>>>>>>>>>>>>
 
 from fastapi import Body
@@ -522,8 +866,6 @@ async def edit_member(member_index: int, data: Data = Body(...)):
         conn.close()
     return {"message": "Member updated successfully"}
 
-
-
 #<<<<<<<<<<<<<<<<<GET FAMILY MEMBER>>>>>>>>>>>>>>>>>>>>
 from fastapi import Depends
 
@@ -561,7 +903,6 @@ async def get_member(email: str = Query(...)):
     finally:
         conn.close()
     return {"members": members}
-
 
 #<<<<<<<<<<<<<<<<<DELETE MEMBER ENDPOINT>>>>>>>>>>>>>>>>>>
 class DeleteMemberRequest(BaseModel):
@@ -663,11 +1004,12 @@ async def delete_member(email: str = Query(...), member_index: int = Query(...))
     finally:
         conn.close()
 
+#<<<<<<<<<<<<<<<<<PROMPT FOR SIDE BAR>>>>>>>>>>>>>>>>>>>
 
-#<<<<<<<<<<<<<<<<<PROMPT FOR SIDE BAR>>>>>>>>>>>>>>>>>>
+from typing import Optional
 
 @app.get("/medlife/ask_ai/")
-async def ask_ai(query: str, api_key: str, provider: str = "openai", email: str = None, member_data: str = None):
+async def ask_ai(query: str, api_key: str, provider: str = "openai", email: Optional[str] = None, member_data: Optional[str] = None, fallback_provider: Optional[str] = None):
     prompt_text = f"Act as an Healthcare AI assistant, answer health questions based on patient data. "
     
     if member_data and member_data != "undefined":
@@ -692,12 +1034,10 @@ async def ask_ai(query: str, api_key: str, provider: str = "openai", email: str 
     model = config["models"][0] if config and "models" in config else "gpt-3.5-turbo"
     
     try:
-        final_answer = ask_provider(prompt_text, api_key, provider, model)
+        final_answer = ask_provider(prompt_text, api_key, provider, model, fallback=fallback_provider)
         return final_answer
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
 
 #<<<<<<<<<<<<<<<<<PROMPT FOR CHAT>>>>>>>>>>>>>>>>>>
 @app.get("/medlife/prompt/")
@@ -710,8 +1050,6 @@ async def prompt(query: str, api_key: str):
         return final_answer
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
 
 #<<<<<<<<<<<<<<<<<ADD TOKEN>>>>>>>>>>>>>>>>>>
 @app.get("/medlife/tokens/")
@@ -813,13 +1151,11 @@ async def get_member_details(email: str, member_index: int):
     finally:
         conn.close()
 
-
 #<<<<<<<<<<<<<<<<<<<<<<<<<<<<CHAT AREA>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 import json
 import os
 from typing import List, Dict, Any
-
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHAT_DATA_DIR = os.path.join(BASE_DIR, 'chat_data')
@@ -846,8 +1182,6 @@ def load_chat_data_from_file(email: str, member_name: str):
     
     return chat_data
 
-
-
 #<<<<<<<<<<<<<<<<<FETCH CHAT DATA>>>>>>>>>>>>>>>>>>>>
 @app.get("/medlife/fetchChat/")
 async def fetch_chat(email: str, member_name: str):
@@ -865,17 +1199,4 @@ async def save_chat(email: str, member_name: str, request: Request):
 
     save_chat_data_to_file(email, member_name, chat)
     return {"message": "Chat data saved successfully"}
-
-
-@app.get("/api/get-username")
-async def get_username(email: str = Query(...)):
-    conn = get_db_connection()
-    try:
-        cursor = conn.execute("SELECT username FROM users WHERE email = ?", (email,))
-        row = cursor.fetchone()
-        if row:
-            return {"username": row["username"]}
-        else:
-            return {"username": None}
-    finally:
-       conn.close()
+                                                                                                                                    
