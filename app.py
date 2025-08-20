@@ -189,7 +189,7 @@ def init_user_db():
 init_user_db()
 
 # ---------------- Simple lookups ----------------
-@app.get("/medlifeV21/get-username")
+@app.get("/medlifeV2/get-username")
 async def get_username(email: str = Query(...)):
     conn = get_db_connection()
     try:
@@ -198,7 +198,7 @@ async def get_username(email: str = Query(...)):
     finally:
         conn.close()
 
-@app.get("/medlifeV21/get-user-gender")
+@app.get("/medlifeV2/get-user-gender")
 async def get_user_gender(email: str = Query(...)):
     conn = get_db_connection()
     try:
@@ -221,7 +221,7 @@ class CheckUserExistsResponse(BaseModel):
     login_type: str  # 'email' or 'phone'
 
 # Legacy token endpoint (left intact for compatibility; not used in OTP login)
-@app.post("/medlifeV21/token")
+@app.post("/medlifeV2/token")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     conn = get_db_connection()
     try:
@@ -237,7 +237,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     finally:
         conn.close()
 
-@app.post("/medlifeV21/signup")
+@app.post("/medlifeV2/signup")
 def signup(user: UserSignup):
     # email validation
     if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}$', user.email):
@@ -430,7 +430,7 @@ def cleanup_expired_otps():
         conn.close()
 
 # ---------------- Simple ping ----------------
-@app.get("/medlifeV21/ai")
+@app.get("/medlifeV2/ai")
 def read_root():
     return {"Hello": "World"}
 
@@ -711,7 +711,7 @@ def ask_provider(question, api_key, provider="openai", model=None, fallback=None
     return primary
 
 # ---------------- Add / Edit / Get Members ----------------
-@app.post("/medlifeV21/addmember")
+@app.post("/medlifeV2/addmember")
 async def add_member(data: Data = Body(...)):
     email = data.email
     conn = get_db_connection()
@@ -769,7 +769,7 @@ async def add_member(data: Data = Body(...)):
     finally:
         conn.close()
 
-@app.post("/medlifeV21/editmember")
+@app.post("/medlifeV2/editmember")
 async def edit_member(member_index: int = Query(..., ge=1, le=4), data: Data = Body(...)):
     email = data.email
     conn = get_db_connection()
@@ -808,7 +808,7 @@ async def edit_member(member_index: int = Query(..., ge=1, le=4), data: Data = B
     finally:
         conn.close()
 
-@app.get("/medlifeV21/getmember")
+@app.get("/medlifeV2/getmember")
 async def get_member(email: str = Query(...)):
     conn = get_db_connection()
     try:
@@ -838,7 +838,7 @@ async def get_member(email: str = Query(...)):
         conn.close()
 
 # ---------------- Delete Member (with shift up) ----------------
-@app.delete("/medlifeV21/deletemember")
+@app.delete("/medlifeV2/deletemember")
 async def delete_member(email: str = Query(...), member_index: int = Query(..., ge=1, le=4)):
     conn = get_db_connection()
     try:
@@ -928,7 +928,7 @@ async def delete_member(email: str = Query(...), member_index: int = Query(..., 
         conn.close()
 
 # ---------------- Ask AI (sidebar) ----------------
-@app.get("/medlifeV21/ask_ai/")
+@app.get("/medlifeV2/ask_ai/")
 async def ask_ai(query: str, api_key: str, provider: str = "openai",
                  email: Optional[str] = None, member_data: Optional[str] = None,
                  fallback_provider: Optional[str] = None):
@@ -961,7 +961,7 @@ async def ask_ai(query: str, api_key: str, provider: str = "openai",
         raise HTTPException(status_code=400, detail=str(e))
 
 # ---------------- Prompt (chat area) ----------------
-@app.get("/medlifeV21/prompt/")
+@app.get("/medlifeV2/prompt/")
 async def prompt(query: str, api_key: str):
     if not api_key:
         raise HTTPException(status_code=400, detail="OpenAI API key is required")
@@ -975,7 +975,7 @@ async def prompt(query: str, api_key: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 # ---------------- Tokens (per member) ----------------
-@app.get("/medlifeV21/tokens/")
+@app.get("/medlifeV2/tokens/")
 async def increment_tokens(email: str, member_name: str):
     conn = get_db_connection()
     try:
@@ -1000,7 +1000,7 @@ async def increment_tokens(email: str, member_name: str):
     finally:
         conn.close()
 
-@app.get("/medlifeV21/tokensCount/")
+@app.get("/medlifeV2/tokensCount/")
 async def get_token_count(email: str, member_name: str):
     conn = get_db_connection()
     try:
@@ -1019,7 +1019,7 @@ async def get_token_count(email: str, member_name: str):
     finally:
         conn.close()
 
-@app.get("/medlifeV21/member-details/{email}/{member_index}")
+@app.get("/medlifeV2/member-details/{email}/{member_index}")
 async def get_member_details(email: str, member_index: int):
     if member_index < 1 or member_index > 4:
         raise HTTPException(status_code=400, detail="Invalid member index. Must be between 1 and 4")
@@ -1072,11 +1072,11 @@ def load_chat_data_from_file(email: str, member_name: str):
     with open(file_path, 'r') as f:
         return json.load(f)
 
-@app.get("/medlifeV21/fetchChat/")
+@app.get("/medlifeV2/fetchChat/")
 async def fetch_chat(email: str, member_name: str):
     return {"chat": load_chat_data_from_file(email, member_name)}
 
-@app.post("/medlifeV21/saveChat/")
+@app.post("/medlifeV2/saveChat/")
 async def save_chat(email: str, member_name: str, request: Request):
     data = await request.json()
     chat = data.get("chat", [])
@@ -1084,7 +1084,7 @@ async def save_chat(email: str, member_name: str, request: Request):
     return {"message": "Chat data saved successfully"}
 
 # ---------------- OTP API Endpoints (post-login for extra verification) ----------------
-@app.post("/medlifeV21/send-otp")
+@app.post("/medlifeV2/send-otp")
 async def send_otp(request: SendOTPRequest, current_user: str = Depends(get_current_user)):
     """
     Send OTP to email or mobile number AFTER user already has a JWT (extra verification).
@@ -1137,7 +1137,7 @@ async def send_otp(request: SendOTPRequest, current_user: str = Depends(get_curr
     finally:
         conn.close()
 
-@app.post("/medlifeV21/verify-otp")
+@app.post("/medlifeV2/verify-otp")
 async def verify_otp(request: VerifyOTPRequest, current_user: str = Depends(get_current_user)):
     """
     Verify OTP for the logged-in user (extra verification step).
@@ -1194,7 +1194,7 @@ async def verify_otp(request: VerifyOTPRequest, current_user: str = Depends(get_
     finally:
         conn.close()
 
-@app.get("/medlifeV21/otp-status")
+@app.get("/medlifeV2/otp-status")
 async def get_otp_status(type: str, identifier: str, current_user: str = Depends(get_current_user)):
     conn = get_db_connection()
     try:
@@ -1237,7 +1237,7 @@ async def get_otp_status(type: str, identifier: str, current_user: str = Depends
         conn.close()
 
 # ---------------- OTP-based SIGN-IN (passwordless) ----------------
-@app.post("/medlifeV21/check-user", response_model=CheckUserExistsResponse)
+@app.post("/medlifeV2/check-user", response_model=CheckUserExistsResponse)
 def check_user_exists(payload: CheckUserExistsRequest):
     """
     OPTIONAL helper: front-end can call this before /signin
@@ -1260,7 +1260,7 @@ def check_user_exists(payload: CheckUserExistsRequest):
     finally:
         conn.close()
 
-@app.post("/medlifeV21/signin")
+@app.post("/medlifeV2/signin")
 def signin_start(payload: SignInStart):
     """
     Start OTP login by sending an OTP to the provided email or mobile.
@@ -1321,7 +1321,7 @@ def signin_start(payload: SignInStart):
     finally:
         conn.close()
 
-@app.post("/medlifeV21/verify-login-otp")
+@app.post("/medlifeV2/verify-login-otp")
 def verify_login_otp(payload: VerifyLoginOTP):
     """
     Verify OTP for login and return a JWT access token upon success.
