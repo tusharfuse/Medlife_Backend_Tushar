@@ -1,0 +1,16 @@
+
+fastapi
+uvicorn
+pydantic
+python-dotenv
+requests
+twilio
+passlib
+cryptography
+openai
+pillow
+PyMuPDF
+python-docx
+openpyxl
+beautifulsoup4
+textract
