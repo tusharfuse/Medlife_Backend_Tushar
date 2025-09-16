@@ -356,7 +356,7 @@ def signup(user: UserSignup):
         raise HTTPException(status_code=400, detail="Invalid mobile number")
 
     # password validation
-    if not re.match(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$', user.password):
+    if not re.match(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s])[\w\S]{8,}$', user.password):
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long and contain at least one lowercase letter, one uppercase letter, one digit, and one special character.")
 
     conn = get_db_connection()
@@ -489,7 +489,7 @@ def reset_password(request: ResetPasswordRequest):
     new_password = request.new_password
 
     # Validate new password with same rules as signup
-    if not re.match(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$', new_password):
+    if not re.match(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s])[\w\S]{8,}$', new_password):
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long and contain at least one lowercase letter, one uppercase letter, one digit, and one special character.")
 
     conn = get_db_connection()
@@ -1598,308 +1598,141 @@ def verify_login_otp(payload: VerifyLoginOTP):
 # =========================
 # OCR helpers & endpoint (single-endpoint in same app.py)
 # =========================
+# medlife_vision.py
+# FastAPI endpoint: send an image, get back medicine label(s) using OpenAI Vision (gpt-4o-mini).
+# No Textract, no OCR loops. Safer + faster than putting your API key in the frontend.
+# ---------- Medlife Vision Imports (safe to repeat) ----------
 import io, os, re, json, base64
-from typing import List, Tuple, Dict, Optional
-
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
+from typing import List, Dict
 from fastapi import UploadFile, File, HTTPException
-from PIL import Image, ImageOps, ImageFilter
-
-# Optional: HEIC/HEIF support (iOS photos)
-try:
-    import pillow_heif
-    pillow_heif.register_heif_opener()
-except Exception:
-    pass
-
-# ---------- ENV & CLIENTS ----------
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_APIKEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("Set OPENAI_API_KEY")
-
-MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4o")  # use your Pro model
-
+from PIL import Image
 from openai import OpenAI
-oa = OpenAI(api_key=OPENAI_API_KEY)
 
-TEXTRACT_REGION = os.getenv("TEXTRACT_REGION", "ap-south-1")
-textract = boto3.client("textract", region_name=TEXTRACT_REGION)
+# ---------- OpenAI client (init once) ----------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_APIKEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("Set OPENAI_API_KEY")  # e.g., export OPENAI_API_KEY=sk-...
+OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
+_openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ---------- TUNING ----------
-TEXTRACT_CONF_MIN = float(os.getenv("TEXTRACT_CONF_MIN", "55"))
-ROTATIONS         = (0, 90, 180, 270)
-SHORT_EDGE_TARGET = int(os.getenv("SHORT_EDGE_TARGET", "1100"))
-KEEP_TOP_WORDS    = 10
-
-# ---- LLM payload limits ----
-LLM_MAX_CHARS   = int(os.getenv("LLM_MAX_CHARS", "20000"))
-LLM_FRONT_CHARS = int(os.getenv("LLM_FRONT_CHARS", "12000"))
-LLM_BACK_CHARS  = int(os.getenv("LLM_BACK_CHARS", "6000"))
-
-# ---------- UTIL ----------
-def _clean_flat(s: str) -> str:
-    """Hard-flatten: remove ALL newlines + weird whitespace."""
-    if not s:
+# ---------- Utils ----------
+def _mv_clean_flat(s: str) -> str:
+    if not s: 
         return ""
     s = s.replace("\r", "\n")
-    s = re.sub(r"\n+", " ", s)           # kill newlines
-    s = re.sub(r"[ \t]+", " ", s)        # collapse spaces
-    s = re.sub(r"[^\x20-\x7E]", " ", s)  # strip non-ASCII controls
+    s = re.sub(r"\n+", " ", s)
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"[^\x20-\x7E]", " ", s)
     return s.strip()
 
-def _shrink_text(t: str) -> str:
-    """Flatten and truncate to a safe LLM size (keep head+tail)."""
-    t = _clean_flat(t)
-    t = re.sub(r"(\b\w{3,}\b)(\s+\1){3,}", r"\1", t, flags=re.IGNORECASE)  # squash repeats
-    if len(t) <= LLM_MAX_CHARS:
-        return t
-    return (t[:LLM_FRONT_CHARS] + " … " + t[-LLM_BACK_CHARS:])[:LLM_MAX_CHARS]
+def _mv_jpegify(raw: bytes, short_edge: int = 900, quality: int = 85) -> bytes:
+    """Downscale + JPEG for smaller payload & faster model ingest."""
+    try:
+        img = Image.open(io.BytesIO(raw))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        w, h = img.size
+        short = min(w, h)
+        if short > short_edge:
+            scale = short_edge / short
+            img = img.resize((int(w * scale), int(h * scale)))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return raw
 
-def _format_labels(items: List[Dict[str, str]]) -> List[str]:
-    """
-    To: ['Brand Strength (Generic)', ...].
-    - If strength_form exists → 'Brand Strength'
-    - If generic exists → append ' (Generic)'
-    - Deduplicate, preserve order
-    """
+def _mv_format_labels(items: List[Dict[str, str]]) -> List[str]:
+    """[{brand, strength_form?, generic?}] → ['Brand Strength (Generic)']"""
     out, seen = [], set()
     for it in items or []:
-        brand    = (it.get("brand") or "").strip()
-        generic  = (it.get("generic") or "").strip()
-        strength = (it.get("strength_form") or "").strip()
-
-        if not (brand or generic):
+        brand = (it.get("brand") or "").strip()
+        generic = (it.get("generic") or "").strip()
+        sf = (it.get("strength_form") or "").strip()
+        if not brand and not sf and not generic:
             continue
-
-        base = brand or generic
-        if strength:
-            base = f"{base} {strength}"
-        label = f"{base} ({generic})" if (generic and brand) else base
-
+        base = brand if brand else (sf if sf else "Unknown")
+        if brand and sf:
+            base = f"{brand} {sf}"
+        label = f"{base} ({generic})" if generic else base
         k = label.lower()
         if k not in seen:
             seen.add(k)
             out.append(label)
     return out
 
-def _pil_from_bytes(raw: bytes) -> Image.Image:
-    return Image.open(io.BytesIO(raw))
+# ---------- Vision prompt ----------
+__MV_SYSTEM = (
+    "You read medicine/package/prescription images and extract the primary medicine. "
+    "Return a short JSON only (no prose). If uncertain, leave fields blank."
+)
+__MV_USER = (
+    "From this image, extract the single most likely medicine entry.\n"
+    "Rules:\n"
+    "- brand: printed brand name on pack/label; short and exact.\n"
+    "- strength_form: like '500 mg Tablet', '125 mg/5ml Syrup', etc.\n"
+    "- generic: composition or active ingredient(s). If combo, join with ' + '.\n"
+    "- Do NOT include Rx numbers, patient names, addresses, or pharmacy text.\n"
+    'Respond ONLY as JSON: {"items":[{"brand":"","strength_form":"","generic":""}]}\n'
+)
 
-def _preprocess(raw: bytes, mode: str) -> bytes:
-    """mode: 'gray' | 'binary'; returns PNG bytes"""
-    try:
-        img = _pil_from_bytes(raw).convert("L")
-        if mode == "binary":
-            img = ImageOps.autocontrast(img).filter(ImageFilter.SMOOTH)
-            hist = img.histogram(); tot, acc, thr = sum(hist), 0, 128
-            for i, v in enumerate(hist):
-                acc += v
-                if acc >= tot * 0.5: thr = i; break
-            lut = [255 if i > thr else 0 for i in range(256)]
-            img = img.point(lut).convert("L").filter(ImageFilter.SHARPEN)
-        else:
-            img = ImageOps.autocontrast(img).filter(ImageFilter.SHARPEN)
-
-        w, h = img.size
-        short = min(w, h)
-        if short < SHORT_EDGE_TARGET:
-            s = SHORT_EDGE_TARGET / short
-            img = img.resize((int(w*s), int(h*s)))
-        out = io.BytesIO(); img.save(out, format="PNG")
-        return out.getvalue()
-    except Exception:
-        return raw
-
-def _bbox_area(b) -> float:
-    try:
-        bb = b["Geometry"]["BoundingBox"]
-        return float(bb.get("Width", 0.0)) * float(bb.get("Height", 0.0))
-    except Exception:
-        return 0.0
-
-def _textract_once(img_bytes: bytes):
-    try:
-        resp = textract.detect_document_text(Document={"Bytes": img_bytes})
-    except (ClientError, BotoCoreError) as e:
-        raise HTTPException(502, f"Textract error: {e}")
-
-    lines, words = [], []
-    for b in resp.get("Blocks", []):
-        bt = b.get("BlockType")
-        conf = float(b.get("Confidence", 0.0) or 0.0)
-        if bt == "LINE" and conf >= TEXTRACT_CONF_MIN:
-            t = (b.get("Text") or "").strip()
-            if t: lines.append((t, conf, _bbox_area(b)))
-        elif bt == "WORD" and conf >= TEXTRACT_CONF_MIN + 5:
-            w = (b.get("Text") or "").strip()
-            if w: words.append((w, _bbox_area(b)))
-    return lines, words
-
-def _score_pass(lines) -> float:
-    seen, score = set(), 0.0
-    for t, conf, _ in lines:
-        k = t.lower()
-        if k in seen: continue
-        seen.add(k)
-        score += conf + min(len(t)/50.0, 2.0)
-    return score
-
-def _best_ocr_from_image(raw: bytes) -> Tuple[str, List[Tuple[str,float,float]], List[str]]:
-    """Multi-pass OCR and rotations → (text_with_newlines, line_blocks, top_words)"""
-    candidates = []
-    for mode in (None, "gray", "binary"):
-        base = raw if mode is None else _preprocess(raw, mode)
-        for deg in ROTATIONS:
-            try:
-                if deg:
-                    img = Image.open(io.BytesIO(base)).rotate(deg, expand=True)
-                    buf = io.BytesIO(); img.save(buf, format="PNG")
-                    bb = buf.getvalue()
-                else:
-                    bb = base
-            except Exception:
-                bb = base
-            lines, words = _textract_once(bb)
-            candidates.append(((mode or "raw", deg), lines, words, _score_pass(lines)))
-
-    candidates.sort(key=lambda x: x[3], reverse=True)
-    (_mode, _deg), lines, words, _ = candidates[0] if candidates else ((None,0), [], [], 0)
-
-    # Build text (dedupe lines, keep order)
-    seen, out_lines = set(), []
-    for t, _, _ in lines:
-        k = t.lower().strip()
-        if k and k not in seen:
-            seen.add(k); out_lines.append(t)
-
-    areas: Dict[str, float] = {}
-    for w, a in words:
-        ww = re.sub(r"[^\w\-]", "", w)
-        if not ww or not re.search(r"[A-Za-z]", ww): continue
-        areas[ww] = max(areas.get(ww, 0.0), a)
-    top_words = [w for w,_ in sorted(areas.items(), key=lambda kv: kv[1], reverse=True)[:KEEP_TOP_WORDS]]
-
-    return "\n".join(out_lines).strip(), lines, top_words
-
-# ---------- LLM: Function/Tool Calling ----------
-MED_TOOL = [{
-    "type": "function",
-    "function": {
-        "name": "return_medicines",
-        "description": "Return extracted medicines from the label.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "brand":         {"type": "string"},
-                            "generic":       {"type": "string"},
-                            "strength_form": {"type": "string"}
-                        },
-                        "required": ["brand"]
-                    }
-                },
-                "notes": {"type": "string"}
-            },
-            "required": ["items"]
-        }
-    }
-}]
-
-def _extract_meds_with_llm(ocr_text: str) -> Dict:
-    compact = _shrink_text(ocr_text)
-    user_content = (
-        "Read the OCR text from a medicine label. Extract distinct medicines and call the tool.\n"
-        "- Prefer brand from prominent text\n"
-        "- Map nearest generic(s). If combo, join generics with ' + '\n"
-        "- If uncertain, leave generic blank; do NOT invent.\n\n"
-        f"OCR TEXT:\n{compact}"
+def _mv_ask_vision_json(data_url: str) -> Dict:
+    resp = _openai_client.chat.completions.create(
+        model=OPENAI_VISION_MODEL,
+        temperature=0,
+        max_tokens=200,
+        messages=[
+            {"role": "system", "content": __MV_SYSTEM},
+            {"role": "user", "content": [
+                {"type": "text", "text": __MV_USER},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ]},
+        ],
     )
+    msg = resp.choices[0].message
+    txt = (msg.content or "").strip()
 
+    # Parse JSON directly; if wrapped, salvage the first JSON block
     try:
-        comp = oa.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "Extract medicines and call the tool with {items:[{brand, strength_form?, generic?}]}."},
-                {"role": "user", "content": user_content}
-            ],
-            tools=MED_TOOL,  # type: ignore
-            tool_choice={"type": "function", "function": {"name": "return_medicines"}},
-            temperature=0
-        )
-    except Exception as e:
-        return {"items": [], "notes": f"llm_error: {str(e)[:160]}"}
-
-    msg = comp.choices[0].message
-
-    # Newer shape (tool_calls)
-    tc_list = getattr(msg, "tool_calls", None)
-    if tc_list:
-        fn = getattr(tc_list[0], "function", None)
-        if fn and getattr(fn, "arguments", None):
-            try:
-                return json.loads(fn.arguments)
-            except Exception:
-                return {"items": [], "notes": "failed_to_parse_tool_args"}
-
-    # Older shape (function_call) — handle object or dict
-    fc = getattr(msg, "function_call", None)
-    if fc:
-        args = getattr(fc, "arguments", None) if not isinstance(fc, dict) else fc.get("arguments")
-        if args:
-            try:
-                return json.loads(args)
-            except Exception:
-                return {"items": [], "notes": "failed_to_parse_function_args"}
-
-    # Fallback: JSON in content
-    try:
-        return json.loads(msg.content or "{}")
+        return json.loads(txt)
     except Exception:
-        return {"items": [], "notes": "no_tool_and_no_json"}
+        m = re.search(r"\{[\s\S]*\}", txt)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+    return {"items": []}
 
-# ---------- SINGLE ENDPOINT ----------
+# ---------- Endpoint (attach to your existing `app`) ----------
 @app.post("/medlifeV21/ocr")
-async def medlife_ocr(file: UploadFile = File(...)):
+async def medlife_vision(file: UploadFile = File(...)):
     """
-    Returns:
-    {
-      "full_text": "<entire text flattened (no \\n)>",
-      "medicines": ["Brand 500 mg (Generic)", "Brand (Generic)", "Brand"]
-    }
+    Upload a pack/blister/prescription image → returns:
+    { "medicines": ["Brand Strength (Generic)"] }
     """
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "No file data")
 
-    # Normalize via PIL (also enables HEIC if pillow-heif is installed)
-    try:
-        img = _pil_from_bytes(raw).convert("RGB")
-        buf = io.BytesIO(); img.save(buf, format="PNG")
-        raw = buf.getvalue()
-    except Exception:
-        img = None  # still try Textract on raw bytes
+    # Compress for speed, then send as data URL to Vision
+    jpg = _mv_jpegify(raw)
+    b64 = base64.b64encode(jpg).decode("utf-8")
+    data_url = f"data:image/jpeg;base64,{b64}"
 
-    # OCR (multi-pass)
-    full_text_with_newlines, _, _ = _best_ocr_from_image(raw)
-    if not full_text_with_newlines.strip():
-        raise HTTPException(422, "Could not extract any text from the image")
+    data = _mv_ask_vision_json(data_url)
+    meds = _mv_format_labels(data.get("items", []))
 
-    # HARD FLATTEN so JSON has no '\n'
-    full_text = _clean_flat(full_text_with_newlines)
+    # Scrub obvious RX noise if any slipped in
+    meds = [_mv_clean_flat(re.sub(r"(?i)\brx[#:\s]*\w+\b", "", m)).strip(" -") for m in meds]
+    meds = [m for m in meds if m]
 
-    # LLM extraction (text only)
-    data = _extract_meds_with_llm(full_text)
+    if not meds:
+        items = data.get("items") or []
+        if items:
+            meds = _mv_format_labels(items)
 
-    # Format exactly as requested: Brand Strength (Generic)
-    medicines = _format_labels(data.get("items", []))
+    if not meds:
+        raise HTTPException(422, "Could not confidently extract medicine from image")
 
-    return {
-        "full_text": full_text,
-        "medicines": medicines
-    }
-# ---------------- Forgot/Reset Password (HARDENED) ----------------
+    return {"medicines": meds}
